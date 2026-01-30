@@ -58,7 +58,7 @@ class InferenceCore:
 
     def strict_preprocessing(self, data):
         """
-        [严格预处理流程] (仅用于母体心电的清洗与显示)
+        [严格预处理流程] (仅用于母体心电的清洗与网页显示)
         1. 剔除 > 100k 的坏点
         2. 带通 5-50Hz + 陷波 50/60Hz
         """
@@ -85,33 +85,43 @@ class InferenceCore:
         Input: raw_segment (numpy array, 250Hz)
         Output: raw_clean (250Hz), fecg_processed (200Hz)
         """
-        # --- A. 母体信号处理 (用于显示和模型输入) ---
-        # 1. 严格清洗
+        # ==========================================
+        # 1. 准备网页显示的母体心电 (Clean Data)
+        # ==========================================
+        # 这里进行严格清洗，为了让医生看得清楚
         raw_clean = self.strict_preprocessing(raw_segment)
-
-        # 2. 去均值
         raw_clean = raw_clean - np.mean(raw_clean)
 
-        # 3. 计算缩放因子 (用于后续恢复 FECG 幅度)
+        # 计算缩放因子 (基于干净的母体信号)
         p1, p99 = np.percentile(raw_clean, [1, 99])
         scale_factor = (p99 - p1) / 2.0
         if scale_factor < 1e-6: scale_factor = 1.0
 
-        # --- B. 准备模型输入 ---
+        # ==========================================
+        # 2. 准备 AI 模型输入 (Raw Data)
+        # ==========================================
+        # 🔥【核心修正】：这里必须使用 raw_segment (原始含噪数据)！
+        # 如果喂给模型 raw_clean，模型会因为数据分布不匹配而失效，
+        # 导致输出结果也是母体心电。
+
         len_raw = len(raw_segment)
         len_model = len_raw * 4
 
-        # 使用清洗后的干净数据喂给模型
-        raw_1k = signal.resample(raw_clean, len_model)
+        # 使用原始数据重采样
+        raw_1k = signal.resample(raw_segment, len_model)
 
-        # 归一化供模型使用
-        model_input_norm = (raw_1k - np.mean(raw_1k)) / (np.std(raw_1k) + 1e-6)
+        # 归一化 (Z-score) 是模型必须的
+        # Detrend 一下防止极度漂移影响归一化，但不做强滤波
+        raw_1k_detrend = signal.detrend(raw_1k)
+        model_input_norm = (raw_1k_detrend - np.mean(raw_1k_detrend)) / (np.std(raw_1k_detrend) + 1e-6)
 
         # 构造 Tensor
         inp = np.tile(model_input_norm, (4, 1))
         inp_tensor = torch.from_numpy(inp).float().unsqueeze(0).to(DEVICE)
 
-        # --- C. 推理 ---
+        # ==========================================
+        # 3. 执行推理
+        # ==========================================
         with torch.no_grad():
             alpha, beta, alpha_cum, sigmas, T, c1, c2, c3, delta, delta_bar = self.params
             output = runner.predict(self.model, inp_tensor.squeeze(0),
@@ -121,22 +131,23 @@ class InferenceCore:
 
         fecg_1k = output[0, :].cpu().numpy()
 
-        # --- D. 后处理 FECG (按新需求修改) ---
+        # ==========================================
+        # 4. 后处理 FECG (按您的新要求)
+        # ==========================================
 
-        # 1. 带通滤波 7.5Hz - 75Hz (替代原先的35Hz低通)
-        # 注意：在 1000Hz 采样率下进行滤波
+        # (1) 带通滤波 7.5Hz - 75Hz
+        # 这一步能有效去除生成的低频伪影和极高频噪声
         sos_bp = signal.butter(4, [7.5, 75], btype='bandpass', fs=1000, output='sos')
         fecg_filtered = signal.sosfiltfilt(sos_bp, fecg_1k)
 
-        # 2. 重采样到 200Hz (按新需求修改)
+        # (2) 重采样到 200Hz
         # 目标点数 = 原始时间长度(秒) * 200Hz
-        # 原始时间长度 = len_raw / 250
         target_len = int((len_raw / 250.0) * 200)
         fecg_200 = signal.resample(fecg_filtered, target_len)
 
-        # 3. 恢复幅度 (scale_factor 来自 250Hz 的母体信号，直接应用即可)
+        # (3) 恢复幅度
+        # 这一步是为了让 FECG 在网页上能以 uV 为单位显示
         fecg_final = (fecg_200 - np.mean(fecg_200)) * scale_factor
 
-        # 为了方便前端画图，raw_clean 保持 250Hz，fecg_final 是 200Hz
-        # 前端 app.py 会根据数组长度自动对齐时间轴，所以采样率不同也没关系
+        # 返回：[清洗后的母体心电], [提取出的胎儿心电]
         return raw_clean, fecg_final

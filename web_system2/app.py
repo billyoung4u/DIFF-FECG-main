@@ -10,7 +10,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path: sys.path.append(current_dir)
 
 from inference_core import InferenceCore
-from data_stream import TxtDataStream
+from data_stream import TxtDataStream, EdfFileStreamer
 
 # ==========================================
 # 1. 页面配置
@@ -53,13 +53,26 @@ if 'current_time' not in st.session_state:
 # 3. 侧边栏：设置与控制
 # ==========================================
 st.sidebar.title("🎛️ 监护控制台")
-uploaded_file = st.sidebar.file_uploader("📂 加载病例数据 (TXT)", type=['txt'])
+# 修改 file_uploader 支持两种格式
+uploaded_file = st.sidebar.file_uploader("📂 加载病例数据", type=['txt', 'edf'])
 
 # 文件加载逻辑
 if uploaded_file:
     last_file = st.session_state.get('last_filename', None)
     if last_file != uploaded_file.name:
-        st.session_state.stream = TxtDataStream(uploaded_file)
+        # 🔥 根据后缀名判断使用哪个加载器
+        if uploaded_file.name.lower().endswith('.edf'):
+            try:
+                st.session_state.stream = EdfFileStreamer(uploaded_file)
+                st.sidebar.success(f"EDF 文件已加载: {uploaded_file.name}")
+            except Exception as e:
+                st.sidebar.error(f"EDF 读取失败: {e}")
+                st.stop()
+        else:
+            # 默认为 TXT
+            st.session_state.stream = TxtDataStream(uploaded_file)
+            st.sidebar.success(f"TXT 文件已加载: {uploaded_file.name}")
+
         st.session_state.last_filename = uploaded_file.name
         st.session_state.current_time = 0.0
         st.session_state.is_running = False
