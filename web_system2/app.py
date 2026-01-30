@@ -1,0 +1,211 @@
+import streamlit as st
+import numpy as np
+import matplotlib.pyplot as plt
+import time
+import sys
+import os
+
+# --- 路径修复 ---
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path: sys.path.append(current_dir)
+
+from inference_core import InferenceCore
+from data_stream import TxtDataStream
+
+# ==========================================
+# 1. 页面配置
+# ==========================================
+st.set_page_config(
+    page_title="DIFF-FECG 临床监护系统",
+    layout="wide",
+    page_icon="🏥",
+    initial_sidebar_state="expanded"
+)
+
+# CSS 优化：让图表区域背景更干净，文字更清晰，减少顶部空白
+st.markdown("""
+<style>
+    .stApp {background-color: #f8f9fa;} 
+    .block-container {padding-top: 1rem; padding-bottom: 1rem;}
+    /* 隐藏默认菜单 */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+</style>
+""", unsafe_allow_html=True)
+
+# ==========================================
+# 2. 初始化状态 (Session State)
+# ==========================================
+if 'core' not in st.session_state:
+    with st.spinner("正在启动 AI 引擎..."):
+        st.session_state.core = InferenceCore()
+
+if 'stream' not in st.session_state:
+    st.session_state.stream = None
+
+if 'is_running' not in st.session_state:
+    st.session_state.is_running = False
+
+if 'current_time' not in st.session_state:
+    st.session_state.current_time = 0.0
+
+# ==========================================
+# 3. 侧边栏：设置与控制
+# ==========================================
+st.sidebar.title("🎛️ 监护控制台")
+uploaded_file = st.sidebar.file_uploader("📂 加载病例数据 (TXT)", type=['txt'])
+
+# 文件加载逻辑
+if uploaded_file:
+    last_file = st.session_state.get('last_filename', None)
+    if last_file != uploaded_file.name:
+        st.session_state.stream = TxtDataStream(uploaded_file)
+        st.session_state.last_filename = uploaded_file.name
+        st.session_state.current_time = 0.0
+        st.session_state.is_running = False
+        st.sidebar.success(f"已就绪: {uploaded_file.name}")
+
+st.sidebar.divider()
+
+# --- [新功能 1] 通道选择下拉菜单 ---
+channel_options = [f"Channel {i}" for i in range(6)]
+selected_channel_str = st.sidebar.selectbox(
+    "📺 选择监测通道",
+    channel_options,
+    index=0,
+    help="选择要详细分析的导联通道"
+)
+# 解析出通道索引 (0-5)
+selected_ch_idx = int(selected_channel_str.split(" ")[1])
+
+# --- 参数设置 ---
+st.sidebar.divider()
+window_sec = st.sidebar.slider("窗口宽度 (秒)", 2, 8, 4)
+y_range = st.sidebar.slider("Y轴范围 (uV)", 50, 500, 200)
+
+# --- [新功能 3] 播放速度上限提高 ---
+# 这里的“速度”其实是每次循环跳过的时间步长。
+# 之前上限是 0.5s，现在提高到 3.0s，可以实现“快进”效果。
+speed_step = st.sidebar.slider("播放步进 (秒/帧)", 0.1, 3.0, 0.1, help="数值越大，播放越快")
+
+st.sidebar.divider()
+
+# --- 播放控制 ---
+col1, col2, col3 = st.sidebar.columns(3)
+if col1.button("▶️ 播放"):
+    st.session_state.is_running = True
+if col2.button("⏸️ 暂停"):
+    st.session_state.is_running = False
+if col3.button("🔄 重置"):
+    st.session_state.is_running = False
+    st.session_state.current_time = 0.0
+    st.rerun()
+
+st.sidebar.markdown(f"⏱️ **时间**: `{st.session_state.current_time:.2f} s`")
+
+# ==========================================
+# 4. 主界面：绘图逻辑
+# ==========================================
+st.title("🏥 胎儿心电实时提取系统 (Single Channel View)")
+
+if st.session_state.stream is None:
+    st.info("👈 请在左侧上传 TXT 文件以开始监测")
+    st.stop()
+
+# 占位符
+chart_placeholder = st.empty()
+
+
+def draw_plot(start_time):
+    """
+    绘制单帧图像：上下两张子图
+    """
+    stream = st.session_state.stream
+    core = st.session_state.core
+
+    # 获取所有通道的数据块
+    raw_dict, duration = stream.get_data_chunk(start_time, window_sec)
+
+    if raw_dict is None or duration < 0.1:
+        return None  # 数据读完了
+
+    # --- 获取选中通道的数据 ---
+    all_channels = list(raw_dict.keys())
+    if selected_ch_idx >= len(all_channels):
+        st.error("选择的通道索引超出了文件实际通道数")
+        return None
+
+    target_col_name = all_channels[selected_ch_idx]
+    raw_seg = raw_dict[target_col_name]
+
+    # --- AI 推理与严格处理 ---
+    try:
+        raw_clean, fecg_pred = core.process_segment(raw_seg)
+    except Exception as e:
+        return None
+
+    # --- [修改点] 调整图片大小，高度从 9 降到 6 ---
+    fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1, figsize=(12, 6), sharex=True)
+
+    t_axis = np.linspace(start_time, start_time + duration, int(duration * 250))
+    min_len = min(len(t_axis), len(raw_clean), len(fecg_pred))
+
+    # 子图 1: 母体心电 (混合信号)
+    ax1.plot(t_axis[:min_len], raw_clean[:min_len], color='#2c3e50', lw=1.2)
+    ax1.set_title(f"Maternal ECG (Processed) - {selected_channel_str}", fontsize=11, fontweight='bold', loc='left')
+    ax1.set_ylabel("Amplitude (uV)", fontweight='bold', fontsize=9)
+    ax1.set_ylim(-y_range, y_range)
+    ax1.grid(alpha=0.3, linestyle='--')
+    # 稍微调小字体
+    ax1.tick_params(axis='y', labelsize=8)
+    ax1.text(0.01, 0.85, "Processed Input", transform=ax1.transAxes, fontsize=9,
+             bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
+
+    # 子图 2: 胎儿心电 (AI 提取结果)
+    ax2.plot(t_axis[:min_len], fecg_pred[:min_len], color='#e74c3c', lw=1.2)
+    ax2.set_title(f"Fetal ECG (Extracted) - {selected_channel_str}", fontsize=11, fontweight='bold', loc='left',
+                  color='#c0392b')
+    ax2.set_ylabel("Amplitude (uV)", fontweight='bold', fontsize=9)
+    ax2.set_ylim(-y_range, y_range)
+    ax2.grid(alpha=0.3, linestyle='--')
+    # 稍微调小字体
+    ax2.tick_params(axis='both', labelsize=8)
+    ax2.text(0.01, 0.85, "DIFF-FECG Output", transform=ax2.transAxes, fontsize=9,
+             bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'), color='#c0392b')
+
+    # 设置 X 轴
+    ax2.set_xlabel("Time (s)", fontsize=10)
+    ax2.set_xlim(start_time, start_time + window_sec)
+
+    # 调整子图间距，防止重叠
+    plt.tight_layout(pad=1.2, h_pad=0.5)
+    return fig
+
+
+# ==========================================
+# 5. 动画循环
+# ==========================================
+if st.session_state.is_running:
+    while True:
+        fig = draw_plot(st.session_state.current_time)
+
+        if fig is None:
+            st.session_state.is_running = False
+            st.success("✅ 数据回放结束")
+            break
+
+        chart_placeholder.pyplot(fig)
+        plt.close(fig)
+
+        # 使用用户设定的“播放步进”来更新时间
+        st.session_state.current_time += speed_step
+
+        # 稍微休眠，给浏览器渲染留时间
+        time.sleep(0.02)
+
+else:
+    # 暂停状态：只画单帧
+    fig = draw_plot(st.session_state.current_time)
+    if fig:
+        chart_placeholder.pyplot(fig)
+        plt.close(fig)
