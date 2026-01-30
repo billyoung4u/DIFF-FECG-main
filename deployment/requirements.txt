@@ -1,0 +1,12 @@
+fastapi==0.104.0
+uvicorn==0.24.0
+pydantic==2.5.0
+torch>=1.13.0
+numpy
+scipy
+scikit-learn
+wfdb
+pyedflib
+pandas
+streamlit  # 如果你的 inference_core 引用了 streamlit 的 cache，这个得带上
+plotly     # 如果你引用了绘图库
