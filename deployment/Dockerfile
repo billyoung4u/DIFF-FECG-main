@@ -16,5 +16,5 @@ RUN pip install --no-cache-dir -r deployment/requirements.txt -i https://pypi.tu
 EXPOSE 8000
 
 # 6. 启动命令
-# 注意路径：因为 WORKDIR 是 /app.py，所以运行 deployment/server.py
+# 注意路径：因为 WORKDIR 是 /app.py，所以运行 deployment/app.py
 CMD ["python", "deployment/server.py"]

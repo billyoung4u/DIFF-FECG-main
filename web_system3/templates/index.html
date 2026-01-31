@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DIFF-FECG 智能还原系统</title>
+    <style>
+      :root {
+        --bg: #f3f4f6; --panel: #ffffff; --text: #1f2937; --muted: #6b7280;
+        --border: #e5e7eb; --accent: #0ea5e9; --fetal-red: #ef4444;
+        --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); padding-bottom: 40px; }
+      .wrap { max-width: 1400px; margin: 0 auto; padding: 20px; }
+
+      h1 { font-size: 22px; margin: 0 0 20px; color: #111827; font-weight: 700; }
+
+      .controls, .player {
+        background: var(--panel); padding: 16px; border-radius: 12px; margin-bottom: 16px;
+        box-shadow: var(--shadow); border: 1px solid var(--border);
+        display: flex; gap: 16px; flex-wrap: wrap; align-items: center;
+      }
+      .controls label, .player label { font-size: 12px; color: var(--muted); font-weight: 600; display: block; margin-bottom: 4px; }
+      .controls select, .controls input {
+        background: #f9fafb; border: 1px solid #d1d5db; padding: 8px; border-radius: 6px; outline: none;
+      }
+
+      button {
+        background: var(--accent); border: none; color: white; padding: 10px 20px;
+        border-radius: 6px; cursor: pointer; font-weight: 600; transition: opacity 0.2s;
+      }
+      button:hover { opacity: 0.9; }
+      button:disabled { background: #d1d5db; cursor: not-allowed; opacity: 1; }
+
+      #btnAnalyze { background: #8b5cf6; min-width: 180px; }
+
+      .monitor-card {
+        background: var(--panel); border-radius: 16px; padding: 24px;
+        border: 1px solid var(--border); box-shadow: var(--shadow);
+      }
+      .wave-container { margin-bottom: 24px; position: relative; }
+      .wave-container:last-child { margin-bottom: 0; }
+
+      .wave-header {
+        position: absolute; left: 10px; top: 10px; z-index: 10;
+        display: flex; gap: 10px; align-items: center;
+      }
+      .wave-label {
+        font-size: 12px; font-weight: 700; background: rgba(255,255,255,0.95);
+        padding: 4px 8px; border-radius: 4px; border: 1px solid #e5e7eb; pointer-events: none;
+        color: #333;
+      }
+
+      .metrics-tag {
+        font-size: 13px; font-weight: 700; background: #fee2e2; color: #b91c1c;
+        padding: 4px 10px; border-radius: 4px; border: 1px solid #fecaca;
+        display: none;
+        gap: 12px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+        align-items: center;
+      }
+
+      canvas { width: 100%; height: 260px; background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; display: block; }
+      .status { font-family: monospace; font-size: 12px; color: var(--muted); margin-bottom: 20px; padding-left: 4px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>DIFF-FECG 智能还原系统</h1>
+
+      <div class="controls">
+        <div>
+          <label>1. 加载数据 (.txt)</label>
+          <input id="fileInput" type="file" accept=".txt" />
+        </div>
+        <div>
+          <label>2. 选择通道</label>
+          <select id="channelSelect">
+            <option value="0" selected>Channel 1</option>
+            <option value="1">Channel 2</option>
+            <option value="2">Channel 3</option>
+            <option value="3">Channel 4</option>
+            <option value="4">Channel 5</option>
+            <option value="5">Channel 6</option>
+          </select>
+        </div>
+        <div>
+          <label>预处理</label>
+          <select id="preprocess">
+            <option value="demean" selected>去直流</option>
+            <option value="none">无</option>
+          </select>
+        </div>
+        <div>
+          <label>滤波</label>
+          <select id="filterMode">
+            <option value="gui_default" selected>5-50Hz + 工频陷波</option>
+            <option value="gui_with_bandstop">增强 (含60Hz带阻)</option>
+            <option value="none">关闭</option>
+          </select>
+        </div>
+        <div>
+          <label>3. 算法处理</label>
+          <button id="btnAnalyze" disabled>☁️ 调用 DIFF-FECG</button>
+        </div>
+      </div>
+
+      <div class="player" id="playerBar" style="display:none;">
+        <button id="btnPlay">▶ 播放</button>
+        <span style="font-family:monospace; min-width:140px; text-align:center" id="timeDisplay">00:00 / 00:00</span>
+        <input type="range" id="seekBar" min="0" max="100" value="0" step="0.1" style="flex:1" />
+        <div>
+          <label>窗口(s)</label>
+          <input id="timeWindow" type="number" value="5" min="2" max="20" style="width:60px">
+        </div>
+      </div>
+
+      <div id="status" class="status">系统就绪，请加载原始 TXT 数据...</div>
+
+      <div id="mainDisplay" style="display:none;">
+        <div class="monitor-card">
+
+          <div class="wave-container">
+            <canvas id="canvasA"></canvas>
+            <div class="wave-header">
+              <div class="wave-label" style="color:#0ea5e9">波形 A: 母体心电 (Range: ±200 uV)</div>
+            </div>
+          </div>
+
+          <div class="wave-container">
+            <canvas id="canvasB"></canvas>
+            <div class="wave-header">
+              <div class="wave-label" style="color:#ef4444">波形 B: 胎儿心电 (Range: ±5 uV)</div>
+              <div class="metrics-tag" id="fecgMetrics">
+                <span>❤️ HR: <b id="valBpm">--</b> bpm</span>
+                <span style="border-left:1px solid #f87171; padding-left:12px;">📏 RR: <b id="valRr">--</b> ms</span>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <script>
+      let txtFile = null;
+      let allData = null;
+      let fecgData = null;
+      let fecgPeaks = null;
+      let isPlaying = false;
+      let currentTime = 0;
+      let animationId = null;
+      let lastFrameTime = 0;
+
+      const $ = id => document.getElementById(id);
+      const setStatus = msg => $('status').textContent = msg;
+      const formatTime = s => {
+        const m = Math.floor(s / 60);
+        const sec = (s % 60).toFixed(1);
+        return `${m.toString().padStart(2,'0')}:${sec.padStart(4,'0')}`;
+      };
+
+      $('fileInput').addEventListener('change', async e => {
+        const f = e.target.files[0];
+        if (!f) return;
+        txtFile = f;
+
+        setStatus('正在解析 TXT...');
+        const text = await f.text();
+        allData = parseTxtFull(text);
+        allData.filtered = null;
+        fecgData = null; fecgPeaks = null;
+
+        $('playerBar').style.display = 'flex';
+        $('mainDisplay').style.display = 'block';
+        $('btnAnalyze').disabled = false;
+        $('btnAnalyze').textContent = '☁️ 调用 DIFF-FECG';
+        $('fecgMetrics').style.display = 'none';
+
+        $('seekBar').max = allData.duration;
+        currentTime = 0;
+        updateTimeDisplay();
+
+        await ensureTxtFilteredReady();
+        renderCurrentWindow();
+        setStatus(`加载完成: ${allData.duration.toFixed(1)} 秒`);
+      });
+
+      ['preprocess', 'filterMode', 'channelSelect', 'timeWindow'].forEach(id => {
+        $(id).addEventListener('change', async () => {
+          if(id === 'filterMode') await ensureTxtFilteredReady();
+          if(id === 'channelSelect' || id === 'filterMode' || id === 'preprocess') {
+            fecgData = null; fecgPeaks = null;
+            $('btnAnalyze').textContent = '☁️ 调用 DIFF-FECG';
+            $('btnAnalyze').disabled = false;
+            $('fecgMetrics').style.display = 'none';
+          }
+          if (!isPlaying) renderCurrentWindow();
+        });
+      });
+
+      $('btnAnalyze').addEventListener('click', async () => {
+        if (!allData) return;
+        const btn = $('btnAnalyze');
+        btn.disabled = true;
+        btn.textContent = '⏳ 计算中...';
+        setStatus('正在调用后端模型...');
+
+        try {
+          await ensureTxtFilteredReady();
+          const selectedIdx = +$('channelSelect').value;
+
+          const rawCh = allData.channels[selectedIdx];
+          const filtCh = (allData.filtered && allData.filtered.channels) ? allData.filtered.channels[selectedIdx] : null;
+          let signalToSend = (filtCh && $('filterMode').value !== 'none') ? Array.from(filtCh) : rawCh;
+
+          if ($('preprocess').value === 'demean') {
+            const mean = signalToSend.reduce((a,b)=>a+b,0) / signalToSend.length;
+            signalToSend = signalToSend.map(v => v - mean);
+          }
+
+          const response = await fetch('/predict', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ signal: signalToSend, fs: allData.fs })
+          });
+
+          const result = await response.json();
+          if (result.status === 'success') {
+            fecgData = result.fecg;
+            fecgPeaks = result.peaks;
+            setStatus('AI 提取完成！');
+            btn.textContent = '✅ 提取成功';
+            $('fecgMetrics').style.display = 'flex';
+            renderCurrentWindow();
+          } else {
+            throw new Error(result.message);
+          }
+        } catch (e) {
+          console.error(e);
+          setStatus('错误: ' + e.message);
+          btn.textContent = '❌ 失败';
+          btn.disabled = false;
+        }
+      });
+
+      $('btnPlay').addEventListener('click', () => isPlaying ? stopPlayback() : startPlayback());
+      $('seekBar').addEventListener('input', e => {
+        currentTime = +e.target.value;
+        updateTimeDisplay();
+        if (!isPlaying) renderCurrentWindow();
+      });
+
+      function startPlayback() {
+        if (!allData) return;
+        isPlaying = true;
+        $('btnPlay').textContent = '⏸ 暂停';
+        lastFrameTime = performance.now();
+        animate();
+      }
+      function stopPlayback() {
+        isPlaying = false;
+        $('btnPlay').textContent = '▶ 播放';
+        if (animationId) cancelAnimationFrame(animationId);
+      }
+      function animate() {
+        if (!isPlaying) return;
+        const now = performance.now();
+        const delta = (now - lastFrameTime) / 1000;
+        lastFrameTime = now;
+        currentTime += delta;
+        const windowSize = +$('timeWindow').value;
+        if (currentTime > allData.duration - windowSize) currentTime = 0;
+        $('seekBar').value = currentTime;
+        updateTimeDisplay();
+        renderCurrentWindow();
+        animationId = requestAnimationFrame(animate);
+      }
+      function updateTimeDisplay() {
+        if (!allData) return;
+        $('timeDisplay').textContent = `${formatTime(currentTime)} / ${formatTime(allData.duration)}`;
+      }
+
+      function renderCurrentWindow() {
+        if (!allData) return;
+
+        const windowSeconds = +$('timeWindow').value;
+        const selectedIdx = +$('channelSelect').value;
+        const startSample = Math.floor(currentTime * allData.fs);
+        const endSample = Math.min(startSample + Math.floor(windowSeconds * allData.fs), allData.totalSamples);
+
+        const rawArr = allData.channels[selectedIdx];
+        const filtArr = (allData.filtered && allData.filtered.channels) ? allData.filtered.channels[selectedIdx] : null;
+        let useFiltered = (filtArr && $('filterMode').value !== 'none');
+        let yA_full = useFiltered ? filtArr : rawArr;
+        let yA = yA_full.slice(startSample, endSample);
+        yA = Array.from(yA);
+        if ($('preprocess').value === 'demean') {
+          const mean = yA.reduce((a,b)=>a+b,0) / (yA.length||1);
+          yA = yA.map(v => v - mean);
+        }
+        const tA = yA.map((_, i) => i / allData.fs);
+
+        let yB = null, tB = null, visiblePeaks = [];
+        if (fecgData) {
+          yB = fecgData.slice(startSample, endSample);
+          tB = yB.map((_, i) => i / allData.fs);
+
+          if (fecgPeaks && fecgPeaks.length) {
+            visiblePeaks = fecgPeaks.filter(p => p >= startSample && p < endSample);
+            calculateRealTimeMetrics(visiblePeaks, allData.fs);
+            visiblePeaks = visiblePeaks.map(p => ({
+              x: (p - startSample) / allData.fs,
+              y: yB[p - startSample]
+            }));
+          } else {
+            $('valBpm').textContent = '--';
+            $('valRr').textContent = '--';
+          }
+        }
+
+        drawWaveform($('canvasA'), tA, yA, { color: '#0ea5e9', yRange: [-200, 200], xMax: windowSeconds });
+
+        if (yB && yB.length > 0) {
+          // [修改] Y轴范围固定为 -5 到 5
+          drawWaveform($('canvasB'), tB, yB, {
+            color: '#ef4444',
+            yRange: [-5, 5], // Modified to -5 to 5
+            xMax: windowSeconds,
+            peaks: visiblePeaks
+          });
+        } else {
+          drawEmpty($('canvasB'), "等待调用 AI 提取...");
+          $('valBpm').textContent = '--';
+          $('valRr').textContent = '--';
+        }
+      }
+
+      function calculateRealTimeMetrics(peakIndices, fs) {
+        if (peakIndices.length < 2) {
+          $('valBpm').textContent = '--';
+          $('valRr').textContent = '--';
+          return;
+        }
+        let rrSum = 0;
+        for (let i = 1; i < peakIndices.length; i++) {
+          rrSum += (peakIndices[i] - peakIndices[i-1]);
+        }
+        const meanRrSamples = rrSum / (peakIndices.length - 1);
+        const meanRrMs = (meanRrSamples / fs) * 1000;
+        const bpm = 60000 / meanRrMs;
+        $('valBpm').textContent = bpm.toFixed(1);
+        $('valRr').textContent = meanRrMs.toFixed(0);
+      }
+
+      function drawEmpty(canvas, text) {
+        const ctx = canvas.getContext('2d');
+        const W = canvas.width, H = canvas.height;
+        ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,W,H);
+        ctx.fillStyle = '#9ca3af'; ctx.font = '16px sans-serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(text, W/2, H/2);
+      }
+
+      function drawWaveform(canvas, xData, yData, opts) {
+        const dpr = devicePixelRatio || 1;
+        const rect = canvas.getBoundingClientRect();
+        canvas.width = rect.width * dpr;
+        canvas.height = rect.height * dpr;
+        const ctx = canvas.getContext('2d');
+        const W = canvas.width, H = canvas.height;
+        const pad = { l: 50 * dpr, r: 20 * dpr, t: 30 * dpr, b: 30 * dpr };
+        const [yMin, yMax] = opts.yRange;
+        const xMax = opts.xMax;
+        const toX = t => pad.l + (t / xMax) * (W - pad.l - pad.r);
+        const toY = v => H - pad.b - (v - yMin) / (yMax - yMin) * (H - pad.t - pad.b);
+
+        ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H);
+        ctx.lineWidth = 1 * dpr; ctx.font = `${11 * dpr}px monospace`;
+        ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+        ctx.strokeStyle = '#f3f4f6'; ctx.fillStyle = '#6b7280';
+        for (let i = 0; i <= 4; i++) {
+          const val = yMax - (i / 4) * (yMax - yMin);
+          const y = toY(val);
+          ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
+          ctx.fillText(val.toFixed(0), pad.l - 6 * dpr, y);
+        }
+        ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+        const xStep = xMax <= 10 ? 1 : Math.ceil(xMax/5);
+        for (let t = 0; t <= xMax; t += xStep) {
+          const x = toX(t);
+          ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, H - pad.b); ctx.stroke();
+          const label = (t - xMax).toString();
+          ctx.fillText(label, x, H - pad.b + 6 * dpr);
+        }
+
+        if (!xData || !xData.length) return;
+        ctx.save();
+        ctx.beginPath(); ctx.rect(pad.l, pad.t, W - pad.l - pad.r, H - pad.t - pad.b); ctx.clip();
+        ctx.strokeStyle = opts.color; ctx.lineWidth = 1.5 * dpr;
+        ctx.beginPath();
+        const step = Math.max(1, Math.floor(xData.length / (W * 0.8)));
+        let started = false;
+        for (let i = 0; i < xData.length; i += step) {
+          const px = toX(xData[i]); const py = toY(yData[i]);
+          if (!started) { ctx.moveTo(px, py); started = true; } else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+        if (opts.peaks) {
+          ctx.fillStyle = opts.color;
+          const r = 3 * dpr;
+          for (const p of opts.peaks) {
+            ctx.beginPath();
+            ctx.arc(toX(p.x), toY(p.y), r, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+        ctx.restore();
+      }
+
+      function parseTxtFull(text) {
+        const lines = text.split('\n');
+        let fs = 250; const channels = [[],[],[],[],[],[]];
+        let exgMap = {}; let headerPassed = false; const valid = [0,1,2,3,4,5];
+        for (const line of lines) {
+          const s = line.trim(); if (!s) continue;
+          if (s.startsWith('%')) { const m = s.match(/Sample\s*Rate\s*=\s*(\d+)/i); if (m) fs = +m[1]; continue; }
+          const cols = s.split(',').map(v => v.trim());
+          if (!headerPassed) {
+            cols.forEach((c, i) => { const m = c.match(/EXG\s*Channel\s*(\d+)/i); if (m && valid.includes(+m[1])) exgMap[+m[1]] = i; });
+            headerPassed = true;
+          } else {
+            for (let i = 0; i < 6; i++) {
+              if (exgMap[i] != null) {
+                let v = +cols[exgMap[i]]; if (!isFinite(v) || Math.abs(v) > 100000) v = 0;
+                channels[i].push(v);
+              }
+            }
+          }
+        }
+        return { channels, fs, duration: channels[0].length / fs, totalSamples: channels[0].length };
+      }
+      function getTxtFilterConfig() {
+        const mode = $('filterMode')?.value || 'none'; const fs = allData?.fs || 250;
+        const cfg = { mode, fs, bandpass: null, bandstop: null, envNotches: [] };
+        if (mode === 'none') return cfg;
+        cfg.bandpass = { startHz: 5, stopHz: 50 };
+        cfg.envNotches = [{ freqHz: 50, q: 30 }, { freqHz: 60, q: 30 }];
+        if (mode === 'gui_with_bandstop') cfg.bandstop = { startHz: 58, stopHz: 62, repeat: 2 };
+        return cfg;
+      }
+      function buildFilterKey(cfg) { return JSON.stringify(cfg); }
+      async function ensureTxtFilteredReady() {
+        if (!allData) return;
+        const cfg = getTxtFilterConfig(); const key = buildFilterKey(cfg);
+        if (cfg.mode === 'none') { allData.filtered = null; return; }
+        if (allData.filtered && allData.filtered.key === key) return;
+        setStatus('正在执行前端滤波...');
+        const filtered = await computeFilteredChannels(allData.channels, cfg);
+        allData.filtered = { key: key, channels: filtered };
+        setStatus('前端滤波完成');
+      }
+      function designBiquad(fs, type, f0, q) {
+        const w0 = 2 * Math.PI * (f0 / fs); const cosw0 = Math.cos(w0); const sinw0 = Math.sin(w0);
+        const Q = Math.max(1e-6, q); const alpha = sinw0 / (2 * Q);
+        let b0, b1, b2, a0, a1, a2;
+        if (type === 'highpass') { b0 = (1 + cosw0) / 2; b1 = -(1 + cosw0); b2 = (1 + cosw0) / 2; a0 = 1 + alpha; a1 = -2 * cosw0; a2 = 1 - alpha; }
+        else if (type === 'lowpass') { b0 = (1 - cosw0) / 2; b1 = 1 - cosw0; b2 = (1 - cosw0) / 2; a0 = 1 + alpha; a1 = -2 * cosw0; a2 = 1 - alpha; }
+        else if (type === 'notch') { b0 = 1; b1 = -2 * cosw0; b2 = 1; a0 = 1 + alpha; a1 = -2 * cosw0; a2 = 1 - alpha; }
+        return { b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: a1 / a0, a2: a2 / a0 };
+      }
+      function applyBiquadInPlace(buf, coefs) {
+        let z1 = 0, z2 = 0; const { b0, b1, b2, a1, a2 } = coefs;
+        for (let i = 0; i < buf.length; i++) {
+          const x = buf[i]; const y = b0 * x + z1;
+          z1 = b1 * x - a1 * y + z2; z2 = b2 * x - a2 * y; buf[i] = y;
+        }
+      }
+      function applyNotch(buf, fs, freqHz, q, repeat=1) { if (freqHz >= fs/2) return; const coefs = designBiquad(fs, 'notch', freqHz, q); for(let i=0; i<repeat; i++) applyBiquadInPlace(buf, coefs); }
+      function applyBandpassApprox(buf, fs, startHz, stopHz) { const Q = 0.707; applyBiquadInPlace(buf, designBiquad(fs, 'highpass', startHz, Q)); applyBiquadInPlace(buf, designBiquad(fs, 'lowpass', stopHz, Q)); }
+      async function computeFilteredChannels(channels, cfg) {
+        const out = []; const fs = cfg.fs;
+        for (let i = 0; i < channels.length; i++) {
+          const buf = new Float64Array(channels[i]);
+          if (cfg.bandpass) applyBandpassApprox(buf, fs, cfg.bandpass.startHz, cfg.bandpass.stopHz);
+          if (cfg.bandstop) { const center = (cfg.bandstop.startHz + cfg.bandstop.stopHz) / 2; const bw = cfg.bandstop.stopHz - cfg.bandstop.startHz; applyNotch(buf, fs, center, center/bw, cfg.bandstop.repeat||1); }
+          for (const n of cfg.envNotches) applyNotch(buf, fs, n.freqHz, n.q);
+          out.push(buf);
+          if (i % 2 === 0) await new Promise(r => setTimeout(r, 0));
+        }
+        return out;
+      }
+    </script>
+  </body>
+</html>

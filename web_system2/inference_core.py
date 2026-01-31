@@ -56,25 +56,33 @@ class InferenceCore:
         model.eval()
         return model
 
-    def strict_preprocessing(self, data):
+    def strict_preprocessing(self, data, fs):
         """
-        [严格预处理流程] (仅用于母体心电的清洗与网页显示)
-        1. 剔除 > 100k 的坏点
-        2. 带通 5-50Hz + 陷波 50/60Hz
+        [通用预处理]
+        让原始数据在频谱特性上尽可能接近 ADDB 数据集
         """
-        # 1. 坏点剔除
-        data = np.clip(data, -100000, 100000)
+        # 1. 极值截断 (去除像脱落一样的巨大幅度突变)
+        # 用分位数裁剪比固定数值更稳健
+        p1, p99 = np.percentile(data, [0.5, 99.5])
+        data = np.clip(data, p1, p99)
 
-        # 2. 滤波 (在 250Hz 下进行)
-        # 50Hz 陷波
-        b_notch, a_notch = signal.iirnotch(w0=50.0, Q=30.0, fs=self.fs_raw)
+        # 2. 移除直流偏置 (去基线)
+        # 方法：先减去均值，再用高通滤波
+        data = data - np.mean(data)
+
+        # 3. 组合滤波 (关键步骤)
+        # ADDB 频带通常在 0.05 - 100Hz 之间。
+        # 真实环境噪声大，建议：
+        # - 高通 1.0Hz (去除顽固基线漂移)
+        # - 低通 75Hz (去除肌电干扰，胎儿QRS能量主要在10-50Hz)
+        # - 陷波 50Hz (去除电源干扰)
+
+        # A. 50Hz 陷波 (根据你所在地的市电频率修改，国内50，国外部分60)
+        b_notch, a_notch = signal.iirnotch(w0=50.0, Q=30.0, fs=fs)
         data = signal.filtfilt(b_notch, a_notch, data)
-        # 60Hz 陷波
-        b_notch2, a_notch2 = signal.iirnotch(w0=60.0, Q=30.0, fs=self.fs_raw)
-        data = signal.filtfilt(b_notch2, a_notch2, data)
 
-        # 5-50Hz 带通
-        sos = signal.butter(4, [5, 50], btype='bandpass', fs=self.fs_raw, output='sos')
+        # B. 带通滤波 1Hz - 75Hz
+        sos = signal.butter(4, [1.0, 75.0], btype='bandpass', fs=fs, output='sos')
         data = signal.sosfiltfilt(sos, data)
 
         return data
@@ -82,45 +90,44 @@ class InferenceCore:
     def process_segment(self, raw_segment):
         """
         处理一个时间窗口的数据
-        Input: raw_segment (numpy array, 250Hz)
-        Output: raw_clean (250Hz), fecg_processed (200Hz)
         """
         # ==========================================
-        # 1. 准备网页显示的母体心电 (Clean Data)
+        # 1. 统一清洗 (让数据像 ADDB)
         # ==========================================
-        # 这里进行严格清洗，为了让医生看得清楚
-        raw_clean = self.strict_preprocessing(raw_segment)
-        raw_clean = raw_clean - np.mean(raw_clean)
+        # 先在 250Hz 下清洗，效果最好，计算量也小
+        clean_segment = self.strict_preprocessing(raw_segment, fs=self.fs_raw)
 
-        # 计算缩放因子 (基于干净的母体信号)
-        p1, p99 = np.percentile(raw_clean, [1, 99])
+        # ==========================================
+        # 2. 准备网页显示的母体心电
+        # ==========================================
+        # 计算缩放因子用于还原显示
+        p1, p99 = np.percentile(clean_segment, [1, 99])
         scale_factor = (p99 - p1) / 2.0
         if scale_factor < 1e-6: scale_factor = 1.0
 
         # ==========================================
-        # 2. 准备 AI 模型输入 (Raw Data)
+        # 3. 准备 AI 模型输入 (升采样 + 归一化)
         # ==========================================
-        # 🔥【核心修正】：这里必须使用 raw_segment (原始含噪数据)！
-        # 如果喂给模型 raw_clean，模型会因为数据分布不匹配而失效，
-        # 导致输出结果也是母体心电。
+        len_raw = len(clean_segment)
+        # 目标长度：因为模型是按 1000Hz 训练的，所以点数要 * 4
+        target_len = int(len_raw * (self.fs_model / self.fs_raw))
 
-        len_raw = len(raw_segment)
-        len_model = len_raw * 4
+        # A. 升采样 (250Hz -> 1000Hz)
+        # 注意：使用 clean_segment 进行重采样，不要用 raw_segment
+        raw_1k = signal.resample(clean_segment, target_len)
 
-        # 使用原始数据重采样
-        raw_1k = signal.resample(raw_segment, len_model)
-
-        # 归一化 (Z-score) 是模型必须的
-        # Detrend 一下防止极度漂移影响归一化，但不做强滤波
-        raw_1k_detrend = signal.detrend(raw_1k)
-        model_input_norm = (raw_1k_detrend - np.mean(raw_1k_detrend)) / (np.std(raw_1k_detrend) + 1e-6)
+        # B. Z-Score 归一化 (Domain Adaptation 的核心)
+        # 这一步强制让数据分布符合 N(0, 1)，消除幅度差异
+        mu = np.mean(raw_1k)
+        sigma = np.std(raw_1k)
+        model_input_norm = (raw_1k - mu) / (sigma + 1e-6)
 
         # 构造 Tensor
-        inp = np.tile(model_input_norm, (4, 1))
+        inp = np.tile(model_input_norm, (4, 1))  # 复制4份 (Batch=4)
         inp_tensor = torch.from_numpy(inp).float().unsqueeze(0).to(DEVICE)
 
         # ==========================================
-        # 3. 执行推理
+        # 4. 执行推理
         # ==========================================
         with torch.no_grad():
             alpha, beta, alpha_cum, sigmas, T, c1, c2, c3, delta, delta_bar = self.params
@@ -132,22 +139,52 @@ class InferenceCore:
         fecg_1k = output[0, :].cpu().numpy()
 
         # ==========================================
-        # 4. 后处理 FECG (按您的新要求)
+        # 5. 后处理 FECG
         # ==========================================
-
-        # (1) 带通滤波 7.5Hz - 75Hz
-        # 这一步能有效去除生成的低频伪影和极高频噪声
-        sos_bp = signal.butter(4, [7.5, 75], btype='bandpass', fs=1000, output='sos')
+        # 再次滤波清理生成结果
+        sos_bp = signal.butter(4, [5.0, 70.0], btype='bandpass', fs=1000, output='sos')
         fecg_filtered = signal.sosfiltfilt(sos_bp, fecg_1k)
 
-        # (2) 重采样到 200Hz
-        # 目标点数 = 原始时间长度(秒) * 200Hz
-        target_len = int((len_raw / 250.0) * 200)
-        fecg_200 = signal.resample(fecg_filtered, target_len)
+        # 降采样回 200Hz (为了显示或其他用途)
+        final_len = int((len_raw / self.fs_raw) * 200)
+        fecg_200 = signal.resample(fecg_filtered, final_len)
 
-        # (3) 恢复幅度
-        # 这一步是为了让 FECG 在网页上能以 uV 为单位显示
-        fecg_final = (fecg_200 - np.mean(fecg_200)) * scale_factor
+        # 恢复幅度 (可选，为了视觉上匹配输入)
+        fecg_final = (fecg_200 - np.mean(fecg_200)) * (scale_factor * 0.5)  # 胎儿信号通常比母体弱
 
-        # 返回：[清洗后的母体心电], [提取出的胎儿心电]
-        return raw_clean, fecg_final
+        return clean_segment, fecg_final
+
+    def calculate_fhr_metrics(self, fecg_signal, fs=200):
+        """
+        [新增] 根据 FECG 信号计算心率指标
+        :param fecg_signal: 200Hz 的胎儿心电信号 (numpy array)
+        :param fs: 采样率，默认为 200Hz
+        :return: 包含 'bpm' (心率) 和 'rr_mean' (平均RR间隔) 的字典
+        """
+        # 1. 寻找 R 峰
+        # distance: 设置最小峰间距。胎儿心率较快 (110-180bpm)，
+        # 180bpm = 3Hz = 0.33s。为了安全起见，设置最小间距为 0.25s (240bpm)
+        min_distance = int(fs * 0.25)
+
+        # height: 动态阈值，避免噪声干扰
+        threshold = np.max(fecg_signal) * 0.4
+
+        peaks, _ = signal.find_peaks(fecg_signal, distance=min_distance, height=threshold)
+
+        if len(peaks) < 2:
+            return None  # 峰值太少，无法计算
+
+        # 2. 计算 RR 间隔 (单位：秒)
+        rr_intervals = np.diff(peaks) / fs
+
+        # 3. 计算指标
+        mean_rr = np.mean(rr_intervals)
+        if mean_rr == 0: return None
+
+        bpm = 60.0 / mean_rr
+
+        return {
+            "bpm": bpm,  # 实时心率 (BPM)
+            "rr_mean": mean_rr,  # 平均 RR 间隔 (秒)
+            "rr_std": np.std(rr_intervals) * 1000  # RR 变异性 (ms)
+        }
