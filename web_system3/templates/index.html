@@ -13,7 +13,6 @@
       * { box-sizing: border-box; }
       body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); padding-bottom: 40px; }
       .wrap { max-width: 1400px; margin: 0 auto; padding: 20px; }
-
       h1 { font-size: 22px; margin: 0 0 20px; color: #111827; font-weight: 700; }
 
       .controls, .player {
@@ -22,43 +21,18 @@
         display: flex; gap: 16px; flex-wrap: wrap; align-items: center;
       }
       .controls label, .player label { font-size: 12px; color: var(--muted); font-weight: 600; display: block; margin-bottom: 4px; }
-      .controls select, .controls input {
-        background: #f9fafb; border: 1px solid #d1d5db; padding: 8px; border-radius: 6px; outline: none;
-      }
+      .controls select, .controls input { background: #f9fafb; border: 1px solid #d1d5db; padding: 8px; border-radius: 6px; outline: none; }
 
-      button {
-        background: var(--accent); border: none; color: white; padding: 10px 20px;
-        border-radius: 6px; cursor: pointer; font-weight: 600; transition: opacity 0.2s;
-      }
-      button:hover { opacity: 0.9; }
+      button { background: var(--accent); border: none; color: white; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: 600; }
       button:disabled { background: #d1d5db; cursor: not-allowed; opacity: 1; }
-
       #btnAnalyze { background: #8b5cf6; min-width: 180px; }
 
-      .monitor-card {
-        background: var(--panel); border-radius: 16px; padding: 24px;
-        border: 1px solid var(--border); box-shadow: var(--shadow);
-      }
+      .monitor-card { background: var(--panel); border-radius: 16px; padding: 24px; border: 1px solid var(--border); box-shadow: var(--shadow); }
       .wave-container { margin-bottom: 24px; position: relative; }
-      .wave-container:last-child { margin-bottom: 0; }
+      .wave-header { position: absolute; left: 10px; top: 10px; z-index: 10; display: flex; gap: 10px; align-items: center; }
+      .wave-label { font-size: 12px; font-weight: 700; background: rgba(255,255,255,0.95); padding: 4px 8px; border-radius: 4px; border: 1px solid #e5e7eb; pointer-events: none; color: #333; }
 
-      .wave-header {
-        position: absolute; left: 10px; top: 10px; z-index: 10;
-        display: flex; gap: 10px; align-items: center;
-      }
-      .wave-label {
-        font-size: 12px; font-weight: 700; background: rgba(255,255,255,0.95);
-        padding: 4px 8px; border-radius: 4px; border: 1px solid #e5e7eb; pointer-events: none;
-        color: #333;
-      }
-
-      .metrics-tag {
-        font-size: 13px; font-weight: 700; background: #fee2e2; color: #b91c1c;
-        padding: 4px 10px; border-radius: 4px; border: 1px solid #fecaca;
-        display: none;
-        gap: 12px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);
-        align-items: center;
-      }
+      .metrics-tag { font-size: 13px; font-weight: 700; background: #fee2e2; color: #b91c1c; padding: 4px 10px; border-radius: 4px; border: 1px solid #fecaca; display: none; gap: 12px; align-items: center; }
 
       canvas { width: 100%; height: 260px; background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; display: block; }
       .status { font-family: monospace; font-size: 12px; color: var(--muted); margin-bottom: 20px; padding-left: 4px; }
@@ -69,120 +43,73 @@
       <h1>DIFF-FECG 智能还原系统</h1>
 
       <div class="controls">
-        <div>
-          <label>1. 加载数据 (.txt)</label>
-          <input id="fileInput" type="file" accept=".txt" />
-        </div>
+        <div><label>1. 加载数据 (.txt)</label><input id="fileInput" type="file" accept=".txt" /></div>
         <div>
           <label>2. 选择通道</label>
           <select id="channelSelect">
-            <option value="0" selected>Channel 1</option>
-            <option value="1">Channel 2</option>
-            <option value="2">Channel 3</option>
-            <option value="3">Channel 4</option>
-            <option value="4">Channel 5</option>
-            <option value="5">Channel 6</option>
+            <option value="0" selected>Channel 1</option><option value="1">Channel 2</option><option value="2">Channel 3</option>
+            <option value="3">Channel 4</option><option value="4">Channel 5</option><option value="5">Channel 6</option>
           </select>
         </div>
-        <div>
-          <label>预处理</label>
-          <select id="preprocess">
-            <option value="demean" selected>去直流</option>
-            <option value="none">无</option>
-          </select>
-        </div>
-        <div>
-          <label>滤波</label>
-          <select id="filterMode">
-            <option value="gui_default" selected>5-50Hz + 工频陷波</option>
-            <option value="gui_with_bandstop">增强 (含60Hz带阻)</option>
-            <option value="none">关闭</option>
-          </select>
-        </div>
-        <div>
-          <label>3. 算法处理</label>
-          <button id="btnAnalyze" disabled>☁️ 调用 DIFF-FECG</button>
-        </div>
+        <div><label>预处理</label><select id="preprocess"><option value="demean" selected>去直流</option><option value="none">无</option></select></div>
+        <div><label>滤波</label><select id="filterMode"><option value="gui_default" selected>5-50Hz + 工频陷波</option><option value="gui_with_bandstop">增强 (含60Hz带阻)</option><option value="none">关闭</option></select></div>
+        <div><label>3. 算法处理</label><button id="btnAnalyze" disabled>☁️ 调用 DIFF-FECG</button></div>
       </div>
 
       <div class="player" id="playerBar" style="display:none;">
         <button id="btnPlay">▶ 播放</button>
         <span style="font-family:monospace; min-width:140px; text-align:center" id="timeDisplay">00:00 / 00:00</span>
         <input type="range" id="seekBar" min="0" max="100" value="0" step="0.1" style="flex:1" />
-        <div>
-          <label>窗口(s)</label>
-          <input id="timeWindow" type="number" value="5" min="2" max="20" style="width:60px">
-        </div>
+        <div><label>窗口(s)</label><input id="timeWindow" type="number" value="5" min="2" max="20" style="width:60px"></div>
       </div>
 
       <div id="status" class="status">系统就绪，请加载原始 TXT 数据...</div>
 
       <div id="mainDisplay" style="display:none;">
         <div class="monitor-card">
-
           <div class="wave-container">
             <canvas id="canvasA"></canvas>
             <div class="wave-header">
-              <div class="wave-label" style="color:#0ea5e9">波形 A: 母体心电 (Range: ±200 uV)</div>
+              <div class="wave-label" style="color:#0ea5e9">波形 A: 母体心电 (Fixed: ±200 uV)</div>
             </div>
           </div>
-
           <div class="wave-container">
             <canvas id="canvasB"></canvas>
             <div class="wave-header">
-              <div class="wave-label" style="color:#ef4444">波形 B: 胎儿心电 (Range: ±5 uV)</div>
+              <div class="wave-label" style="color:#ef4444" id="labelB">波形 B: 胎儿心电 (Wait AI...)</div>
               <div class="metrics-tag" id="fecgMetrics">
                 <span>❤️ HR: <b id="valBpm">--</b> bpm</span>
                 <span style="border-left:1px solid #f87171; padding-left:12px;">📏 RR: <b id="valRr">--</b> ms</span>
               </div>
             </div>
           </div>
-
         </div>
       </div>
     </div>
 
     <script>
-      let txtFile = null;
-      let allData = null;
-      let fecgData = null;
-      let fecgPeaks = null;
-      let isPlaying = false;
-      let currentTime = 0;
-      let animationId = null;
-      let lastFrameTime = 0;
+      let txtFile = null; let allData = null;
+      let fecgData = null; let fecgPeaks = null; let fecgFs = 200;
+      let isPlaying = false; let currentTime = 0; let animationId = null; let lastFrameTime = 0;
 
       const $ = id => document.getElementById(id);
       const setStatus = msg => $('status').textContent = msg;
       const formatTime = s => {
-        const m = Math.floor(s / 60);
-        const sec = (s % 60).toFixed(1);
+        const m = Math.floor(s / 60); const sec = (s % 60).toFixed(1);
         return `${m.toString().padStart(2,'0')}:${sec.padStart(4,'0')}`;
       };
 
       $('fileInput').addEventListener('change', async e => {
-        const f = e.target.files[0];
-        if (!f) return;
-        txtFile = f;
-
+        const f = e.target.files[0]; if (!f) return; txtFile = f;
         setStatus('正在解析 TXT...');
         const text = await f.text();
         allData = parseTxtFull(text);
-        allData.filtered = null;
-        fecgData = null; fecgPeaks = null;
-
-        $('playerBar').style.display = 'flex';
-        $('mainDisplay').style.display = 'block';
-        $('btnAnalyze').disabled = false;
-        $('btnAnalyze').textContent = '☁️ 调用 DIFF-FECG';
+        allData.filtered = null; fecgData = null; fecgPeaks = null;
+        $('playerBar').style.display = 'flex'; $('mainDisplay').style.display = 'block';
+        $('btnAnalyze').disabled = false; $('btnAnalyze').textContent = '☁️ 调用 DIFF-FECG';
         $('fecgMetrics').style.display = 'none';
-
-        $('seekBar').max = allData.duration;
-        currentTime = 0;
-        updateTimeDisplay();
-
-        await ensureTxtFilteredReady();
-        renderCurrentWindow();
+        $('seekBar').max = allData.duration; currentTime = 0; updateTimeDisplay();
+        await ensureTxtFilteredReady(); renderCurrentWindow();
         setStatus(`加载完成: ${allData.duration.toFixed(1)} 秒`);
       });
 
@@ -191,9 +118,8 @@
           if(id === 'filterMode') await ensureTxtFilteredReady();
           if(id === 'channelSelect' || id === 'filterMode' || id === 'preprocess') {
             fecgData = null; fecgPeaks = null;
-            $('btnAnalyze').textContent = '☁️ 调用 DIFF-FECG';
-            $('btnAnalyze').disabled = false;
-            $('fecgMetrics').style.display = 'none';
+            $('btnAnalyze').textContent = '☁️ 调用 DIFF-FECG'; $('btnAnalyze').disabled = false;
+            $('fecgMetrics').style.display = 'none'; $('labelB').textContent = "波形 B: 胎儿心电 (Wait AI...)";
           }
           if (!isPlaying) renderCurrentWindow();
         });
@@ -201,156 +127,151 @@
 
       $('btnAnalyze').addEventListener('click', async () => {
         if (!allData) return;
-        const btn = $('btnAnalyze');
-        btn.disabled = true;
-        btn.textContent = '⏳ 计算中...';
+        const btn = $('btnAnalyze'); btn.disabled = true; btn.textContent = '⏳ 计算中...';
         setStatus('正在调用后端模型...');
-
         try {
           await ensureTxtFilteredReady();
           const selectedIdx = +$('channelSelect').value;
-
           const rawCh = allData.channels[selectedIdx];
           const filtCh = (allData.filtered && allData.filtered.channels) ? allData.filtered.channels[selectedIdx] : null;
           let signalToSend = (filtCh && $('filterMode').value !== 'none') ? Array.from(filtCh) : rawCh;
-
           if ($('preprocess').value === 'demean') {
             const mean = signalToSend.reduce((a,b)=>a+b,0) / signalToSend.length;
             signalToSend = signalToSend.map(v => v - mean);
           }
-
           const response = await fetch('/predict', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            method: 'POST', headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ signal: signalToSend, fs: allData.fs })
           });
-
           const result = await response.json();
           if (result.status === 'success') {
             fecgData = result.fecg;
             fecgPeaks = result.peaks;
-            setStatus('AI 提取完成！');
+            fecgFs = result.fecg_fs || 200;
+            setStatus(`AI 提取完成 (Peaks found: ${fecgPeaks.length})`);
             btn.textContent = '✅ 提取成功';
             $('fecgMetrics').style.display = 'flex';
             renderCurrentWindow();
-          } else {
-            throw new Error(result.message);
-          }
+          } else { throw new Error(result.message); }
         } catch (e) {
-          console.error(e);
-          setStatus('错误: ' + e.message);
-          btn.textContent = '❌ 失败';
-          btn.disabled = false;
+          console.error(e); setStatus('错误: ' + e.message); btn.textContent = '❌ 失败'; btn.disabled = false;
         }
       });
 
       $('btnPlay').addEventListener('click', () => isPlaying ? stopPlayback() : startPlayback());
       $('seekBar').addEventListener('input', e => {
-        currentTime = +e.target.value;
-        updateTimeDisplay();
-        if (!isPlaying) renderCurrentWindow();
+        currentTime = +e.target.value; updateTimeDisplay(); if (!isPlaying) renderCurrentWindow();
       });
 
-      function startPlayback() {
-        if (!allData) return;
-        isPlaying = true;
-        $('btnPlay').textContent = '⏸ 暂停';
-        lastFrameTime = performance.now();
-        animate();
-      }
-      function stopPlayback() {
-        isPlaying = false;
-        $('btnPlay').textContent = '▶ 播放';
-        if (animationId) cancelAnimationFrame(animationId);
-      }
+      function startPlayback() { if (!allData) return; isPlaying = true; $('btnPlay').textContent = '⏸ 暂停'; lastFrameTime = performance.now(); animate(); }
+      function stopPlayback() { isPlaying = false; $('btnPlay').textContent = '▶ 播放'; if (animationId) cancelAnimationFrame(animationId); }
       function animate() {
         if (!isPlaying) return;
-        const now = performance.now();
-        const delta = (now - lastFrameTime) / 1000;
-        lastFrameTime = now;
-        currentTime += delta;
-        const windowSize = +$('timeWindow').value;
+        const now = performance.now(); const delta = (now - lastFrameTime) / 1000; lastFrameTime = now;
+        currentTime += delta; const windowSize = +$('timeWindow').value;
         if (currentTime > allData.duration - windowSize) currentTime = 0;
-        $('seekBar').value = currentTime;
-        updateTimeDisplay();
-        renderCurrentWindow();
+        $('seekBar').value = currentTime; updateTimeDisplay(); renderCurrentWindow();
         animationId = requestAnimationFrame(animate);
       }
-      function updateTimeDisplay() {
-        if (!allData) return;
-        $('timeDisplay').textContent = `${formatTime(currentTime)} / ${formatTime(allData.duration)}`;
+      function updateTimeDisplay() { if (!allData) return; $('timeDisplay').textContent = `${formatTime(currentTime)} / ${formatTime(allData.duration)}`; }
+
+      function getAutoYRange(dataArray) {
+        if (!dataArray || dataArray.length === 0) return [-1, 1];
+        let maxVal = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+          const abs = Math.abs(dataArray[i]);
+          if (abs > maxVal) maxVal = abs;
+        }
+        if (maxVal < 0.1) maxVal = 0.1;
+        const limit = maxVal * 1.2;
+        return [-limit, limit];
       }
 
       function renderCurrentWindow() {
         if (!allData) return;
-
         const windowSeconds = +$('timeWindow').value;
         const selectedIdx = +$('channelSelect').value;
-        const startSample = Math.floor(currentTime * allData.fs);
-        const endSample = Math.min(startSample + Math.floor(windowSeconds * allData.fs), allData.totalSamples);
 
+        // --- A: 母体 ---
+        const startSampleA = Math.floor(currentTime * allData.fs);
+        const endSampleA = Math.min(startSampleA + Math.floor(windowSeconds * allData.fs), allData.totalSamples);
         const rawArr = allData.channels[selectedIdx];
         const filtArr = (allData.filtered && allData.filtered.channels) ? allData.filtered.channels[selectedIdx] : null;
         let useFiltered = (filtArr && $('filterMode').value !== 'none');
         let yA_full = useFiltered ? filtArr : rawArr;
-        let yA = yA_full.slice(startSample, endSample);
-        yA = Array.from(yA);
+        let yA = Array.from(yA_full.slice(startSampleA, endSampleA));
         if ($('preprocess').value === 'demean') {
-          const mean = yA.reduce((a,b)=>a+b,0) / (yA.length||1);
-          yA = yA.map(v => v - mean);
+          const mean = yA.reduce((a,b)=>a+b,0) / (yA.length||1); yA = yA.map(v => v - mean);
         }
         const tA = yA.map((_, i) => i / allData.fs);
 
+        // --- B: 胎儿 ---
         let yB = null, tB = null, visiblePeaks = [];
+        let rangeB = [-1, 1];
+
         if (fecgData) {
-          yB = fecgData.slice(startSample, endSample);
-          tB = yB.map((_, i) => i / allData.fs);
+          const startSampleB = Math.floor(currentTime * fecgFs);
+          const endSampleB = Math.min(startSampleB + Math.floor(windowSeconds * fecgFs), fecgData.length);
+
+          yB = fecgData.slice(startSampleB, endSampleB);
+          tB = yB.map((_, i) => i / fecgFs);
+          rangeB = getAutoYRange(yB);
+
+          $('labelB').textContent = `波形 B: 胎儿心电 (Auto Range: ±${rangeB[1].toFixed(2)} uV) | Total Peaks: ${fecgPeaks ? fecgPeaks.length : 0}`;
 
           if (fecgPeaks && fecgPeaks.length) {
-            visiblePeaks = fecgPeaks.filter(p => p >= startSample && p < endSample);
-            calculateRealTimeMetrics(visiblePeaks, allData.fs);
-            visiblePeaks = visiblePeaks.map(p => ({
-              x: (p - startSample) / allData.fs,
-              y: yB[p - startSample]
-            }));
+            // 筛选当前窗口内的 R 峰 (索引是针对 200Hz 数据的)
+            visiblePeaks = fecgPeaks.filter(p => p >= startSampleB && p < endSampleB);
+
+            // 计算指标
+            calculateRealTimeMetrics(visiblePeaks, fecgFs);
+
+            // 转换为 Canvas 绘图坐标
+            // 重点修正：确保 yB 数组索引不越界
+            visiblePeaks = visiblePeaks.map(p => {
+                const relIdx = p - startSampleB;
+                // 安全检查
+                const yVal = (yB[relIdx] !== undefined) ? yB[relIdx] : 0;
+                return {
+                    x: relIdx / fecgFs,
+                    y: yVal
+                };
+            });
           } else {
-            $('valBpm').textContent = '--';
-            $('valRr').textContent = '--';
+            $('valBpm').textContent = '--'; $('valRr').textContent = '--';
           }
         }
 
         drawWaveform($('canvasA'), tA, yA, { color: '#0ea5e9', yRange: [-200, 200], xMax: windowSeconds });
 
         if (yB && yB.length > 0) {
-          // [修改] Y轴范围固定为 -5 到 5
           drawWaveform($('canvasB'), tB, yB, {
             color: '#ef4444',
-            yRange: [-5, 5], // Modified to -5 to 5
+            yRange: rangeB,
             xMax: windowSeconds,
             peaks: visiblePeaks
           });
         } else {
           drawEmpty($('canvasB'), "等待调用 AI 提取...");
-          $('valBpm').textContent = '--';
-          $('valRr').textContent = '--';
+          $('valBpm').textContent = '--'; $('valRr').textContent = '--';
         }
       }
 
       function calculateRealTimeMetrics(peakIndices, fs) {
-        if (peakIndices.length < 2) {
-          $('valBpm').textContent = '--';
-          $('valRr').textContent = '--';
-          return;
-        }
+        if (peakIndices.length < 2) { $('valBpm').textContent = '--'; $('valRr').textContent = '--'; return; }
         let rrSum = 0;
-        for (let i = 1; i < peakIndices.length; i++) {
-          rrSum += (peakIndices[i] - peakIndices[i-1]);
-        }
+        for (let i = 1; i < peakIndices.length; i++) rrSum += (peakIndices[i] - peakIndices[i-1]);
         const meanRrSamples = rrSum / (peakIndices.length - 1);
         const meanRrMs = (meanRrSamples / fs) * 1000;
         const bpm = 60000 / meanRrMs;
-        $('valBpm').textContent = bpm.toFixed(1);
-        $('valRr').textContent = meanRrMs.toFixed(0);
+
+        if (bpm > 30 && bpm < 250) {
+            $('valBpm').textContent = bpm.toFixed(1);
+            $('valRr').textContent = meanRrMs.toFixed(0);
+        } else {
+            $('valBpm').textContent = '--';
+            $('valRr').textContent = '--';
+        }
       }
 
       function drawEmpty(canvas, text) {
@@ -358,18 +279,16 @@
         const W = canvas.width, H = canvas.height;
         ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,W,H);
         ctx.fillStyle = '#9ca3af'; ctx.font = '16px sans-serif';
-        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText(text, W/2, H/2);
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(text, W/2, H/2);
       }
 
       function drawWaveform(canvas, xData, yData, opts) {
         const dpr = devicePixelRatio || 1;
         const rect = canvas.getBoundingClientRect();
-        canvas.width = rect.width * dpr;
-        canvas.height = rect.height * dpr;
+        canvas.width = rect.width * dpr; canvas.height = rect.height * dpr;
         const ctx = canvas.getContext('2d');
         const W = canvas.width, H = canvas.height;
-        const pad = { l: 50 * dpr, r: 20 * dpr, t: 30 * dpr, b: 30 * dpr };
+        const pad = { l: 60 * dpr, r: 20 * dpr, t: 30 * dpr, b: 30 * dpr };
         const [yMin, yMax] = opts.yRange;
         const xMax = opts.xMax;
         const toX = t => pad.l + (t / xMax) * (W - pad.l - pad.r);
@@ -383,7 +302,7 @@
           const val = yMax - (i / 4) * (yMax - yMin);
           const y = toY(val);
           ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
-          ctx.fillText(val.toFixed(0), pad.l - 6 * dpr, y);
+          ctx.fillText(val.toFixed(1), pad.l - 6 * dpr, y);
         }
         ctx.textAlign = 'center'; ctx.textBaseline = 'top';
         const xStep = xMax <= 10 ? 1 : Math.ceil(xMax/5);
@@ -406,18 +325,24 @@
           if (!started) { ctx.moveTo(px, py); started = true; } else ctx.lineTo(px, py);
         }
         ctx.stroke();
-        if (opts.peaks) {
+
+        // 绘制红点
+        if (opts.peaks && opts.peaks.length > 0) {
           ctx.fillStyle = opts.color;
           const r = 3 * dpr;
           for (const p of opts.peaks) {
             ctx.beginPath();
-            ctx.arc(toX(p.x), toY(p.y), r, 0, Math.PI * 2);
-            ctx.fill();
+            // 确保坐标有效
+            if (!isNaN(p.y)) {
+                ctx.arc(toX(p.x), toY(p.y), r, 0, Math.PI * 2);
+                ctx.fill();
+            }
           }
         }
         ctx.restore();
       }
 
+      // ... (保留 parseTxtFull, 滤波函数等，未改动) ...
       function parseTxtFull(text) {
         const lines = text.split('\n');
         let fs = 250; const channels = [[],[],[],[],[],[]];

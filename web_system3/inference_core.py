@@ -5,16 +5,13 @@ import os
 import sys
 import importlib.util
 
-# ==========================================
-# 1. 路径设置
-# ==========================================
 current_dir = os.path.dirname(os.path.abspath(__file__))
 root_dir = os.path.dirname(current_dir)
 
 if root_dir not in sys.path:
     sys.path.append(root_dir)
 
-# 动态加载根目录下的 GetTrainTest-fecg.py
+# 动态加载 GetTrainTest-fecg.py
 runner_path = os.path.join(root_dir, "GetTrainTest-fecg.py")
 if not os.path.exists(runner_path):
     runner_path = os.path.join(current_dir, "GetTrainTest-fecg.py")
@@ -63,10 +60,10 @@ class InferenceCore:
 
     def predict_from_signal(self, input_signal, fs=250):
         """
-        Input: input_signal (前端处理后的单通道数据)
-        Output: (fecg_display, peaks)
+        Input: input_signal (uV)
+        Output: (fecg_real_uv, peaks)
         """
-        # 1. 域适应滤波 (1-75Hz)
+        # 1. 宽带滤波
         sos_model = signal.butter(4, [1.0, 75.0], btype='bandpass', fs=fs, output='sos')
         raw_for_model = signal.sosfiltfilt(sos_model, input_signal)
 
@@ -74,7 +71,7 @@ class InferenceCore:
         target_len = int(len(input_signal) * (self.fs_model / fs))
         raw_1k = signal.resample(raw_for_model, target_len)
 
-        # 3. Z-Score 归一化
+        # 3. Z-Score 归一化 (记录 sigma)
         mu = np.mean(raw_1k)
         sigma = np.std(raw_1k)
         if sigma < 1e-6: sigma = 1.0
@@ -93,32 +90,45 @@ class InferenceCore:
 
         fecg_1k = output[0, :].cpu().numpy()
 
-        # 5. 后处理
-        sos_post = signal.butter(4, [5.0, 70.0], btype='bandpass', fs=1000, output='sos')
+        # 5. 后处理 (7.5-75Hz)
+        sos_post = signal.butter(4, [7.5, 75.0], btype='bandpass', fs=1000, output='sos')
         fecg_clean = signal.sosfiltfilt(sos_post, fecg_1k)
 
-        # 降采样回原始频率
-        fecg_final = signal.resample(fecg_clean, len(input_signal))
+        # 6. 降采样回 200Hz
+        # 注意：这里我们强制输出 200Hz，因为这是显示的标准
+        duration_sec = len(input_signal) / fs
+        target_len_200 = int(duration_sec * 200)
+        fecg_final = signal.resample(fecg_clean, target_len_200)
 
         # 去直流
         fecg_final = fecg_final - np.mean(fecg_final)
 
-        # [核心修正] 强制幅度缩放 -> 适配 +/- 5 的范围
-        # 统计 99.5% 分位点，将其映射到 4.0 左右（留 1.0 的余量）
-        abs_val = np.abs(fecg_final)
-        p99 = np.percentile(abs_val, 99.5)
+        # 7. 物理还原
+        # 模型输出(单位1) * 输入Sigma(单位uV) = 输出(单位uV)
+        fecg_real_uv = fecg_final * sigma
 
-        if p99 < 1e-6: p99 = 1.0
+        # =======================================================
+        # [关键修复] 极高灵敏度的峰值检测
+        # =======================================================
+        # 1. 最小距离: 200Hz 下的 0.3s = 60 点 (对应心率上限 200bpm)
+        min_dist = int(200 * 0.30)
 
-        scale_factor = 4.0 / p99  # 改为 4.0 (适配 +/- 5 范围)
-        fecg_display = fecg_final * scale_factor
+        # 2. 阈值策略:
+        # 改用 prominence (突起度)，只要波峰比周围凸出一定比例就算，不看绝对高度
+        # 我们计算信号的 Range (Max - Min)
+        signal_range = np.ptp(fecg_real_uv)
 
-        # [核心修正] 峰值检测阈值调整
-        # 信号最大值约在 4.0 ~ 5.0
-        # 绝对阈值设为 1.5 比较稳健
-        min_dist = int(fs * 0.30)
-        height_thresh = 1.5  # 改为 1.5
+        if signal_range > 0.1:
+            # 只要突起度超过信号总体幅度的 25% 就算 R 峰
+            prominence_val = signal_range * 0.25
+            # 同时保留一个极低的绝对高度阈值，防止检测到 0 附近的噪声
+            height_val = np.max(fecg_real_uv) * 0.15
 
-        peaks, _ = signal.find_peaks(fecg_display, distance=min_dist, height=height_thresh)
+            peaks, _ = signal.find_peaks(fecg_real_uv, distance=min_dist, prominence=prominence_val, height=height_val)
+        else:
+            # 信号是一条死线
+            peaks = np.array([])
 
-        return fecg_display, peaks
+        print(f"DEBUG: Signal Range={signal_range:.2f}uV, Detected Peaks={len(peaks)}")
+
+        return fecg_real_uv, peaks

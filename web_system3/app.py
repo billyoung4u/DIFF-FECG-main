@@ -39,7 +39,6 @@ def predict():
         if len(signal_in) == 0:
             return jsonify({'status': 'error', 'message': 'Empty signal'}), 400
 
-        # 获取真实 uV 单位的 FECG 和 峰值
         result = core.predict_from_signal(signal_in, fs=fs_in)
 
         if isinstance(result, tuple) and len(result) == 2:
@@ -51,7 +50,8 @@ def predict():
         return jsonify({
             'status': 'success',
             'fecg': fecg_output.tolist(),
-            'peaks': peaks.tolist()
+            'peaks': peaks.tolist(),
+            'fecg_fs': 200  # [新增] 明确告知前端 FECG 是 200Hz
         })
 
     except Exception as e:
