@@ -5,6 +5,9 @@ import os
 import sys
 import importlib.util
 
+# ==========================================
+# 1. 路径设置
+# ==========================================
 current_dir = os.path.dirname(os.path.abspath(__file__))
 root_dir = os.path.dirname(current_dir)
 
@@ -60,7 +63,7 @@ class InferenceCore:
 
     def predict_from_signal(self, input_signal, fs=250):
         """
-        Input: input_signal (uV)
+        Input: input_signal (单位 uV)
         Output: (fecg_real_uv, peaks)
         """
         # 1. 宽带滤波
@@ -95,7 +98,7 @@ class InferenceCore:
         fecg_clean = signal.sosfiltfilt(sos_post, fecg_1k)
 
         # 6. 降采样回 200Hz
-        # 注意：这里我们强制输出 200Hz，因为这是显示的标准
+        # 计算 200Hz 下的长度
         duration_sec = len(input_signal) / fs
         target_len_200 = int(duration_sec * 200)
         fecg_final = signal.resample(fecg_clean, target_len_200)
@@ -104,31 +107,32 @@ class InferenceCore:
         fecg_final = fecg_final - np.mean(fecg_final)
 
         # 7. 物理还原
-        # 模型输出(单位1) * 输入Sigma(单位uV) = 输出(单位uV)
+        # fecg_final 是归一化的形状，sigma 是原信号的 uV 能量
         fecg_real_uv = fecg_final * sigma
 
         # =======================================================
-        # [关键修复] 极高灵敏度的峰值检测
+        # [关键修复] 峰值检测 V2.0
         # =======================================================
-        # 1. 最小距离: 200Hz 下的 0.3s = 60 点 (对应心率上限 200bpm)
-        min_dist = int(200 * 0.30)
+        # 1. 最小距离: 0.25s (对应 240bpm，防止漏掉快心率)
+        min_dist = int(200 * 0.25)
 
-        # 2. 阈值策略:
-        # 改用 prominence (突起度)，只要波峰比周围凸出一定比例就算，不看绝对高度
-        # 我们计算信号的 Range (Max - Min)
-        signal_range = np.ptp(fecg_real_uv)
+        # 2. 计算信号的动态范围 (Peak-to-Peak)
+        # 用 PTP 而不是 Max，因为基线可能不完全在0
+        dynamic_range = np.ptp(fecg_real_uv)
 
-        if signal_range > 0.1:
-            # 只要突起度超过信号总体幅度的 25% 就算 R 峰
-            prominence_val = signal_range * 0.25
-            # 同时保留一个极低的绝对高度阈值，防止检测到 0 附近的噪声
+        if dynamic_range > 0.5:  # 只有当信号波动大于 0.5uV 才检测
+            # 策略：突起度 (Prominence)
+            # 只要波峰比它相邻的低谷高出 Range 的 25%，就认为是 R 峰
+            # 这比绝对高度阈值更靠谱
+            prominence_val = dynamic_range * 0.25
+
+            # 同时保留一个很低的绝对高度门槛，过滤掉 0 附近的微小噪声
             height_val = np.max(fecg_real_uv) * 0.15
 
             peaks, _ = signal.find_peaks(fecg_real_uv, distance=min_dist, prominence=prominence_val, height=height_val)
         else:
-            # 信号是一条死线
             peaks = np.array([])
 
-        print(f"DEBUG: Signal Range={signal_range:.2f}uV, Detected Peaks={len(peaks)}")
+        print(f"DEBUG: Signal PTP={dynamic_range:.2f}uV, Detected Peaks={len(peaks)}")
 
         return fecg_real_uv, peaks

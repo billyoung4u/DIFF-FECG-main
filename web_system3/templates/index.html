@@ -40,7 +40,7 @@
   </head>
   <body>
     <div class="wrap">
-      <h1>DIFF-FECG 智能还原系统</h1>
+      <h1>DIFF-FECG 智能还原系统 (Raw Output 7.5-75Hz)</h1>
 
       <div class="controls">
         <div><label>1. 加载数据 (.txt)</label><input id="fileInput" type="file" accept=".txt" /></div>
@@ -217,25 +217,21 @@
           tB = yB.map((_, i) => i / fecgFs);
           rangeB = getAutoYRange(yB);
 
-          $('labelB').textContent = `波形 B: 胎儿心电 (Auto Range: ±${rangeB[1].toFixed(2)} uV) | Total Peaks: ${fecgPeaks ? fecgPeaks.length : 0}`;
+          $('labelB').textContent = `波形 B: 胎儿心电 (Auto Range: ±${rangeB[1].toFixed(2)} uV)`;
 
           if (fecgPeaks && fecgPeaks.length) {
-            // 筛选当前窗口内的 R 峰 (索引是针对 200Hz 数据的)
+            // [Fix] 筛选峰值，并计算相对坐标
             visiblePeaks = fecgPeaks.filter(p => p >= startSampleB && p < endSampleB);
 
-            // 计算指标
+            // 计算实时心率
             calculateRealTimeMetrics(visiblePeaks, fecgFs);
 
-            // 转换为 Canvas 绘图坐标
-            // 重点修正：确保 yB 数组索引不越界
+            // 映射到绘图坐标
             visiblePeaks = visiblePeaks.map(p => {
                 const relIdx = p - startSampleB;
-                // 安全检查
+                // [Safety Check] 防止数组越界
                 const yVal = (yB[relIdx] !== undefined) ? yB[relIdx] : 0;
-                return {
-                    x: relIdx / fecgFs,
-                    y: yVal
-                };
+                return { x: relIdx / fecgFs, y: yVal };
             });
           } else {
             $('valBpm').textContent = '--'; $('valRr').textContent = '--';
@@ -263,8 +259,11 @@
         for (let i = 1; i < peakIndices.length; i++) rrSum += (peakIndices[i] - peakIndices[i-1]);
         const meanRrSamples = rrSum / (peakIndices.length - 1);
         const meanRrMs = (meanRrSamples / fs) * 1000;
-        const bpm = 60000 / meanRrMs;
 
+        // 增加极小值保护
+        if (meanRrMs < 100) { $('valBpm').textContent = '--'; $('valRr').textContent = '--'; return; }
+
+        const bpm = 60000 / meanRrMs;
         if (bpm > 30 && bpm < 250) {
             $('valBpm').textContent = bpm.toFixed(1);
             $('valRr').textContent = meanRrMs.toFixed(0);
@@ -326,7 +325,7 @@
         }
         ctx.stroke();
 
-        // 绘制红点
+        // [Fix] 绘制红点
         if (opts.peaks && opts.peaks.length > 0) {
           ctx.fillStyle = opts.color;
           const r = 3 * dpr;
