@@ -58,3 +58,38 @@ class MockECGStreamer:
         self.current_ptr += chunk_size  # 指针前移
         return chunk_aecg, chunk_fecg  # 返回片段
 
+
+class NpyECGStreamer:
+    """从多通道 npy 文件读取并逐块输出指定通道。"""
+
+    def __init__(self, npy_file, channel=0, fs=200):
+        npy_file.seek(0)
+        arr = np.load(npy_file)
+
+        if arr.ndim == 1:
+            arr = arr[None, :]
+        elif arr.ndim == 2:
+            # 尝试判断 (channels, samples) 或 (samples, channels)
+            if arr.shape[0] > arr.shape[1]:
+                arr = arr.T
+        else:
+            raise ValueError("仅支持 1D 或 2D npy 数据，形状如 (C, T) 或 (T, C)")
+
+        self.channels = list(range(arr.shape[0]))
+        if channel < 0 or channel >= arr.shape[0]:
+            raise ValueError(f"通道索引超出范围: 0~{arr.shape[0]-1}")
+
+        self.fs = fs
+        self.full_aecg = arr[channel]
+        self.full_fecg = np.zeros_like(self.full_aecg)  # npy 无真值，用零占位
+        self.current_ptr = 0
+        self.total_len = len(self.full_aecg)
+
+    def get_next_chunk(self, chunk_size=200):
+        if self.current_ptr + chunk_size >= self.total_len:
+            self.current_ptr = 0
+        chunk_aecg = self.full_aecg[self.current_ptr: self.current_ptr + chunk_size]
+        chunk_fecg = self.full_fecg[self.current_ptr: self.current_ptr + chunk_size]
+        self.current_ptr += chunk_size
+        return chunk_aecg, chunk_fecg
+

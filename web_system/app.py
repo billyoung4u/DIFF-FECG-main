@@ -2,7 +2,8 @@ import streamlit as st  # 导入Streamlit用于构建网页界面
 import numpy as np  # 数值计算库
 import time  # 用于睡眠控制循环节奏
 import pandas as pd  # 数据处理库（当前未直接使用）
-from data_stream import MockECGStreamer  # 引入模拟数据流类
+import io
+from data_stream import MockECGStreamer, NpyECGStreamer  # 引入模拟数据流类
 from inference_core import InferenceEngine  # 引入推理引擎
 from utils_vis import plot_ecg_interactive  # 引入绘图函数
 
@@ -13,20 +14,26 @@ st.set_page_config(page_title="AI Fetal Monitor (ADDB)", layout="wide", page_ico
 st.sidebar.title("控制面板")  # 侧边栏标题
 run_simulation = st.sidebar.toggle("开始实时监测", value=False)  # 开关控制是否启动实时监测
 
-# 【修改点 1】只提供 ADDB 的病人选项
-# ADDB 只有这 5 个病人，对应的 index 是 0, 1, 2, 3, 4
-patient_map = {  # 病人名称到索引的映射
-    "r01 (ADDB)": 0,  # 病人 r01 对应索引 0
-    "r04 (ADDB)": 1,  # 病人 r04 对应索引 1
-    "r07 (ADDB)": 2,  # 病人 r07 对应索引 2
-    "r08 (ADDB)": 3,  # 病人 r08 对应索引 3
-    "r10 (ADDB)": 4  # 病人 r10 对应索引 4
-}
-selected_label = st.sidebar.selectbox("选择病人", list(patient_map.keys()))  # 病人选择下拉框
-patient_idx = patient_map[selected_label]  # 获取所选病人的索引
+# 数据源选择：默认 ADDB，也可选择上传 NPY
+data_source = st.sidebar.radio("数据来源", ["ADDB 演示", "NPY 文件"], index=0)
 
-# 【修改点 2】模型选择 (根据你实际有的模型调整)
-# 确保这里列出的名字是你 results/model 文件夹里真实存在的
+# ADDB 选项
+patient_map = {
+    "r01 (ADDB)": 0,
+    "r04 (ADDB)": 1,
+    "r07 (ADDB)": 2,
+    "r08 (ADDB)": 3,
+    "r10 (ADDB)": 4
+}
+selected_label = st.sidebar.selectbox("选择病人", list(patient_map.keys()), disabled=(data_source != "ADDB 演示"))
+patient_idx = patient_map[selected_label]
+
+# NPY 选项
+npy_file = st.sidebar.file_uploader("上传 NPY 母体信号", type=["npy"], disabled=(data_source != "NPY 文件"))
+npy_fs = st.sidebar.number_input("NPY 采样率 (Hz)", min_value=50, max_value=2000, value=200, step=50,
+                                disabled=(data_source != "NPY 文件"))
+
+# 模型选择 (保持原逻辑)
 model_choice = st.sidebar.selectbox("选择模型", ["mkf2_improved", "own"])  # 模型选择下拉框
 
 # --- 初始化状态 ---
@@ -36,6 +43,14 @@ if 'buffer_fecg' not in st.session_state:  # 如果尚未创建 FECG 缓冲
     st.session_state.buffer_fecg = np.zeros(1000)  # 同步长度的FECG缓冲
 if 'history_fhr' not in st.session_state:  # 如果尚未创建 FHR 历史
     st.session_state.history_fhr = []  # 存储历史心率
+if 'stream_source' not in st.session_state:
+    st.session_state.stream_source = 'addb'
+if 'npy_channel' not in st.session_state:
+    st.session_state.npy_channel = 0
+if 'npy_channels' not in st.session_state:
+    st.session_state.npy_channels = 1
+if 'npy_file_bytes' not in st.session_state:
+    st.session_state.npy_file_bytes = None
 
 
 # --- 加载资源 ---
@@ -46,13 +61,58 @@ def get_engine(name):  # 缓存创建推理引擎
 
 
 @st.cache_resource
-def get_streamer(idx):  # 缓存创建数据流
-    # 【修改点 4】强制指定 db='addb'，并传入正确的 idx
-    return MockECGStreamer(db='addb', test_idx=idx)  # 返回模拟数据流实例
+def get_streamer(idx):
+    return MockECGStreamer(db='addb', test_idx=idx)
 
 
-engine = get_engine(model_choice)  # 创建或获取缓存的推理引擎
-streamer = get_streamer(patient_idx)  # 创建或获取缓存的数据流
+engine = get_engine(model_choice)
+
+# 根据数据源决定使用的 streamer
+streamer = None
+source_label = ""
+if data_source == "ADDB 演示":
+    streamer = get_streamer(patient_idx)
+    if st.session_state.stream_source != 'addb':
+        st.session_state.buffer_aecg = np.zeros(1000)
+        st.session_state.history_fhr = []
+    st.session_state.stream_source = 'addb'
+    source_label = f"ADDB - {selected_label.split(' ')[0]}"
+else:
+    if npy_file is not None:
+        # 缓存文件字节以便多次读取
+        if st.session_state.npy_file_bytes is None or st.session_state.get('npy_filename') != npy_file.name:
+            st.session_state.npy_file_bytes = npy_file.getvalue()
+            st.session_state.npy_filename = npy_file.name
+            st.session_state.npy_channel = 0
+            # 探测通道数，逻辑与 NpyECGStreamer 保持一致
+            arr = np.load(io.BytesIO(st.session_state.npy_file_bytes))
+            if arr.ndim == 1:
+                arr = arr[None, :]
+            elif arr.ndim == 2 and arr.shape[0] > arr.shape[1]:
+                arr = arr.T
+            else:
+                arr = arr
+            st.session_state.npy_channels = arr.shape[0]
+            if arr.ndim > 2:
+                st.sidebar.error("仅支持 1D 或 2D npy 数据")
+        # 通道选择
+        channel_choices = list(range(st.session_state.npy_channels))
+        selected_ch = st.sidebar.selectbox("选择通道", channel_choices, index=st.session_state.npy_channel,
+                                           disabled=False)
+        if selected_ch != st.session_state.npy_channel or st.session_state.stream_source != 'npy':
+            st.session_state.npy_channel = selected_ch
+            st.session_state.buffer_aecg = np.zeros(1000)
+            st.session_state.history_fhr = []
+        try:
+            streamer = NpyECGStreamer(io.BytesIO(st.session_state.npy_file_bytes), channel=st.session_state.npy_channel,
+                                      fs=int(npy_fs))
+            st.session_state.stream_source = 'npy'
+            source_label = f"NPY - {npy_file.name} - Ch{st.session_state.npy_channel}"
+        except Exception as e:
+            st.sidebar.error(f"NPY 加载失败: {e}")
+            streamer = None
+    else:
+        st.sidebar.info("请上传 NPY 文件")
 
 # --- 主界面布局 ---
 st.title("👶 智能胎儿心电实时监测系统 (ADDB版)")  # 主标题
@@ -71,7 +131,9 @@ st.subheader("心率趋势 (FHR Trend)")  # 子标题：趋势
 chart_trend = st.empty()  # 占位：心率趋势折线
 
 # --- 实时循环 ---
-if run_simulation:  # 如果开启监测
+if streamer is None:
+    st.info("请选择数据源并完成加载后再启动")
+elif run_simulation:  # 如果开启监测
     # 每次读取的点数（0.2秒），数据采样率为200Hz，次读取的数据点数，对应0.2秒的时间长度。
     # 在这个项目中，数据采样率为200Hz（每秒200个数据点），因此0.2秒的数据量为200 * 0.2 = 40个点
     chunk_size = 40
@@ -92,7 +154,7 @@ if run_simulation:  # 如果开启监测
         fhr, rr = engine.calculate_metrics(peaks)  # 计算心率与 RR
 
         # 更新 UI
-        metric_fhr.metric("胎心python -m streamlit run web_system/app.py.py率 (FHR)", f"{fhr:.0f} bpm", delta=f"{fhr - 140:.0f}")  # 显示心率及相对 140 的差
+        metric_fhr.metric("胎心率 (FHR)", f"{fhr:.0f} bpm", delta=f"{fhr - 140:.0f}")  # 显示心率及相对 140 的差
         metric_rr.metric("RR 间隔", f"{rr:.0f} ms")  # 显示 RR 间隔
 
         if fhr < 110 or fhr > 160:  # 判断心率是否异常
@@ -100,7 +162,7 @@ if run_simulation:  # 如果开启监测
         else:
             metric_status.success("✅ 正常")  # 正常提示
 
-        metric_snr.info(f"数据源: ADDB - {selected_label.split(' ')[0]}")  # 显示数据源信息
+        metric_snr.info(f"数据源: {source_label}")  # 显示数据源信息
 
         # 使用 Plotly 画图
 
